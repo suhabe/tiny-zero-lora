@@ -1,5 +1,6 @@
 from typing import cast
 
+import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
@@ -22,6 +23,32 @@ def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], t
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
     return {"prompt": cast(str, prompt), "target": target}
+
+
+class GPUMemoryCallback(TrainerCallback):
+    """Log device memory snapshots and this process's PyTorch peaks per optimizer step."""
+
+    def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
+        if state.is_world_process_zero and args.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(args.device)
+
+    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
+        if not state.is_world_process_zero or args.device.type != "cuda" or not torch.cuda.is_available():
+            return
+
+        gib = 1024**3
+        device = args.device
+        free, total = torch.cuda.mem_get_info(device)
+        print(
+            f"  GPU step {state.global_step}"
+            f" | device used {(total - free) / gib:.1f}/{total / gib:.1f} GiB"
+            f" | device free {free / gib:.1f} GiB"
+            f" | torch allocated {torch.cuda.memory_allocated(device) / gib:.1f} GiB"
+            f" | torch reserved {torch.cuda.memory_reserved(device) / gib:.1f} GiB"
+            f" | torch peak allocated {torch.cuda.max_memory_allocated(device) / gib:.1f} GiB"
+            f" | torch peak reserved {torch.cuda.max_memory_reserved(device) / gib:.1f} GiB",
+            flush=True,
+        )
 
 
 class ReadableLoggingCallback(TrainerCallback):
@@ -96,7 +123,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         eval_dataset=datasets["test"],
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[ReadableLoggingCallback()],
+        callbacks=[ReadableLoggingCallback(), GPUMemoryCallback()],
     )
     trainer.remove_callback(PrinterCallback)
 
