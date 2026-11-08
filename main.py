@@ -67,7 +67,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         max_steps=max_steps,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=16,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         bf16=True,
         max_completion_length=MAX_COMPLETION_LENGTH,
         num_generations=16,
