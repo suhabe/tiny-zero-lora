@@ -17,9 +17,9 @@ image = image.add_local_file(SOURCE_DIR / "reward.py", "/app/reward.py")
 
 
 @app.function(image=image, gpu="B300", cpu=8, memory=32768, timeout=86400, volumes={"/data": volume})
-def train(max_steps: int = 100, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
+def train() -> None:
     from main import main
 
-    main(output_dir="/data/qwen-r1-aha-moment", max_steps=max_steps, dataset_size=dataset_size, batch_size=batch_size, use_vllm=use_vllm)
+    main()
     volume.commit()
 

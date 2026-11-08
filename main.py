@@ -10,12 +10,6 @@ from trl import GRPOConfig, GRPOTrainer
 from reward import equation_reward_func, format_reward_func
 
 
-MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
-MAX_PROMPT_LENGTH = 256
-MAX_COMPLETION_LENGTH = 1024
-EVAL_STEPS = 10
-EVAL_SIZE = 100
-
 
 def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], target: int) -> dict[str, str | int]:
     messages = [
@@ -78,17 +72,26 @@ class ReadableLoggingCallback(TrainerCallback):
         print("\n".join(lines), flush=True)
 
 
-def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_size: int = 50000) -> None:
+def main() -> None:
+
+    output_dir = "qwen-r1-aha-moment"
+    model_id = "Qwen/Qwen2.5-3B-Instruct"
+    max_prompt_length = 256
+    max_completion_length = 1024
+    dataset_size = 2000
+
+
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
-    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
+    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(model_id, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
 
     dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
-    dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
-    datasets = dataset.train_test_split(test_size=0.1, seed=42)
-    eval_dataset = datasets["test"].select(range(min(EVAL_SIZE, len(datasets["test"]))))
+    dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= max_prompt_length)
+    dataset_split = dataset.train_test_split(test_size=0.1, seed=42)
+    train_dataset = dataset_split["train"]
+    eval_dataset = dataset_split["test"]
 
     grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
@@ -97,23 +100,23 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         num_train_epochs=1,
         logging_steps=1,
         eval_strategy="steps",
-        eval_steps=EVAL_STEPS,
+        eval_steps=10,
         eval_on_start=True,
         per_device_eval_batch_size=1,
         num_generations_eval=1,
         disable_tqdm=True,
-        max_steps=max_steps,
+        max_steps=500,
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         gradient_checkpointing=False,
         bf16=True,
-        max_completion_length=MAX_COMPLETION_LENGTH,
+        max_completion_length=max_completion_length,
         num_generations=16,
         temperature=1.0,
-        use_vllm=true,
+        use_vllm=True,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.3,
-        vllm_max_model_length=MAX_PROMPT_LENGTH + MAX_COMPLETION_LENGTH,
+        vllm_max_model_length=max_prompt_length + max_completion_length,
         beta=0.001,
         save_total_limit=1,
         report_to="none",
@@ -128,10 +131,10 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
     )
 
     trainer = GRPOTrainer(
-        model=MODEL_ID,
+        model=model_id,
         reward_funcs=[format_reward_func, equation_reward_func],
         args=grpo_config,
-        train_dataset=datasets["train"],
+        train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
