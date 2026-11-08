@@ -14,23 +14,24 @@ MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 1024
 
 
+def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], target: int) -> dict[str, str | int]:
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Think through the problem before answering."},
+        {"role": "user", "content": f"Using the numbers {numbers}, create an expression that equals {target}. Use only basic arithmetic (+, -, *, /) and each number exactly once. Show your work in <think> </think> tags. Return only the expression, without an equals sign, in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."},
+        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    ]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
+    return {"prompt": prompt, "target": target}
+
+
 def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
+    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
 
-    def generate_r1_prompt(numbers: list[int], target: int) -> dict[str, str | int]:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant. Think through the problem before answering."},
-            {"role": "user", "content": f"Using the numbers {numbers}, create an expression that equals {target}. Use only basic arithmetic (+, -, *, /) and each number exactly once. Show your work in <think> </think> tags. Return only the expression, without an equals sign, in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."},
-            {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-        ]
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
-        return {"prompt": cast(str, prompt), "target": target}
-
-    dataset = dataset.map(lambda row: generate_r1_prompt(row["nums"], row["target"]))
+    dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
     dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
 
@@ -57,7 +58,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
-        reward_funcs=[cast(Callable[..., list[float | None]], format_reward_func), cast(Callable[..., list[float | None]], equation_reward_func)],
+        reward_funcs=[format_reward_func, equation_reward_func],
         args=training_args,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
