@@ -45,7 +45,7 @@ class ReadableLoggingCallback(TrainerCallback):
         print("\n".join(lines), flush=True)
 
 
-def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
+def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_size: int = 50000) -> None:
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
@@ -64,14 +64,14 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         logging_steps=1,
         disable_tqdm=True,
         max_steps=max_steps,
-        per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=16,
+        per_device_train_batch_size=16,
+        gradient_accumulation_steps=2,
         gradient_checkpointing=False,
         bf16=True,
         max_completion_length=MAX_COMPLETION_LENGTH,
         num_generations=16,
         temperature=1.0,
-        use_vllm=use_vllm,
+        use_vllm=true,
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.3,
         vllm_max_model_length=MAX_PROMPT_LENGTH + MAX_COMPLETION_LENGTH,
