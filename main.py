@@ -61,7 +61,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=2e-5,
         num_train_epochs=1,
-        logging_steps=5,
+        logging_steps=1,
         disable_tqdm=True,
         max_steps=max_steps,
         per_device_train_batch_size=batch_size,
