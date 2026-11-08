@@ -3,7 +3,7 @@ from typing import cast
 
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.trainer_callback import PrinterCallback
 from trl import GRPOConfig, GRPOTrainer
 
@@ -13,6 +13,16 @@ from reward import equation_reward_func, format_reward_func
 MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 1024
+
+
+def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], target: int) -> dict[str, str | int]:
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Think through the problem before answering."},
+        {"role": "user", "content": f"Using the numbers {numbers}, create an expression that equals {target}. Use only basic arithmetic (+, -, *, /) and each number exactly once. Show your work in <think> </think> tags. Return only the expression, without an equals sign, in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."},
+        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    ]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
+    return {"prompt": cast(str, prompt), "target": target}
 
 
 class ReadableLoggingCallback(TrainerCallback):
@@ -40,19 +50,10 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
+    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
 
-    def generate_r1_prompt(numbers: list[int], target: int) -> dict[str, str | int]:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant. Think through the problem before answering."},
-            {"role": "user", "content": f"Using the numbers {numbers}, create an expression that equals {target}. Use only basic arithmetic (+, -, *, /) and each number exactly once. Show your work in <think> </think> tags. Return only the expression, without an equals sign, in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."},
-            {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-        ]
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
-        return {"prompt": cast(str, prompt), "target": target}
-
-    dataset = dataset.map(lambda row: generate_r1_prompt(row["nums"], row["target"]))
+    dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
     dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
 
@@ -93,7 +94,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     trainer.train()
     trainer.save_state()
     trainer.save_model(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
+    tokenizer.save_pretrained(output_dir)
 
 
 if __name__ == "__main__":
