@@ -1,5 +1,6 @@
 from typing import cast
 
+import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
@@ -12,6 +13,8 @@ from reward import equation_reward_func, format_reward_func
 MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 1024
+EVAL_STEPS = 10
+EVAL_SIZE = 100
 
 
 def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], target: int) -> dict[str, str | int]:
@@ -24,9 +27,39 @@ def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], t
     return {"prompt": cast(str, prompt), "target": target}
 
 
+class GPUMemoryCallback(TrainerCallback):
+    """Log device memory snapshots and this process's PyTorch peaks per optimizer step."""
+
+    def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
+        if state.is_world_process_zero and args.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(args.device)
+
+    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
+        if not state.is_world_process_zero or args.device.type != "cuda" or not torch.cuda.is_available():
+            return
+
+        gib = 1024**3
+        device = args.device
+        free, total = torch.cuda.mem_get_info(device)
+        print(
+            f"  GPU step {state.global_step}"
+            f" | device used {(total - free) / gib:.1f}/{total / gib:.1f} GiB"
+            f" | device free {free / gib:.1f} GiB"
+            f" | torch allocated {torch.cuda.memory_allocated(device) / gib:.1f} GiB"
+            f" | torch reserved {torch.cuda.memory_reserved(device) / gib:.1f} GiB"
+            f" | torch peak allocated {torch.cuda.max_memory_allocated(device) / gib:.1f} GiB"
+            f" | torch peak reserved {torch.cuda.max_memory_reserved(device) / gib:.1f} GiB",
+            flush=True,
+        )
+
+
 class ReadableLoggingCallback(TrainerCallback):
     def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs: dict[str, float] | None = None, **kwargs: object) -> None:
         if logs is None or not state.is_world_process_zero:
+            return
+
+        if "eval_rewards/equation_reward_func/mean" in logs:
+            print(f"Held-out step {state.global_step} | solve rate {logs['eval_rewards/equation_reward_func/mean']:.1%} | format {logs['eval_rewards/format_reward_func/mean']:.1%} | {logs['eval_runtime']:.2f} s", flush=True)
             return
 
         if "train_runtime" in logs:
@@ -55,6 +88,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
     dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
     dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
+    eval_dataset = datasets["test"].select(range(min(EVAL_SIZE, len(datasets["test"]))))
 
     grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
@@ -62,6 +96,11 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         learning_rate=2e-5,
         num_train_epochs=1,
         logging_steps=1,
+        eval_strategy="steps",
+        eval_steps=EVAL_STEPS,
+        eval_on_start=True,
+        per_device_eval_batch_size=1,
+        num_generations_eval=1,
         disable_tqdm=True,
         max_steps=max_steps,
         per_device_train_batch_size=16,
@@ -93,14 +132,18 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         reward_funcs=[format_reward_func, equation_reward_func],
         args=grpo_config,
         train_dataset=datasets["train"],
-        eval_dataset=datasets["test"],
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[ReadableLoggingCallback()],
+        callbacks=[ReadableLoggingCallback(), GPUMemoryCallback()],
     )
     trainer.remove_callback(PrinterCallback)
 
     trainer.train()
+
+    if trainer.state.global_step % EVAL_STEPS != 0:
+        trainer.evaluate()
+
     trainer.save_state()
     trainer.save_model(grpo_config.output_dir)
     tokenizer.save_pretrained(output_dir)
