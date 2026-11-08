@@ -4,8 +4,12 @@ from unittest.mock import Mock
 
 from datasets import Dataset
 import pytest
-from trl import GRPOConfig
-from transformers import TrainerControl, TrainerState, TrainingArguments
+from trl import GRPOConfig, GRPOTrainer
+from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast, TrainerControl, TrainerState, TrainingArguments
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+import torch
 
 import main as training
 
@@ -17,6 +21,7 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     tokenizer.apply_chat_template.side_effect = lambda messages, **kwargs: "overlong" if "[3, 4]" in messages[1]["content"] else "prompt"
     tokenizer.encode.side_effect = lambda prompt, **kwargs: [1] * (257 if prompt == "overlong" else 125)
     create_trainer = Mock()
+    create_trainer.return_value.state = TrainerState(global_step=1)
 
     def cpu_config(**kwargs: Any) -> GRPOConfig:
         kwargs.update(bf16=False, use_cpu=True)
@@ -52,7 +57,12 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert config.temperature == 1.0
     assert config.vllm_gpu_memory_utilization == 0.3
     assert config.gradient_checkpointing is False
-    assert config.logging_steps == 5
+    assert config.logging_steps == 1
+    assert config.eval_strategy == "steps"
+    assert config.eval_steps == 10
+    assert config.eval_on_start is True
+    assert config.num_generations_eval == 1
+    assert config.per_device_eval_batch_size == 1
     assert config.save_total_limit == 1
     assert config.disable_tqdm is True
 
@@ -64,8 +74,62 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert peft_config.task_type == "CAUSAL_LM"
 
     create_trainer.return_value.train.assert_called_once()
+    create_trainer.return_value.evaluate.assert_called_once_with()
     create_trainer.return_value.save_model.assert_called_once_with(str(tmp_path))
     create_trainer.return_value.save_state.assert_called_once()
+
+
+@pytest.mark.parametrize("max_steps", [10, 11])
+def test_held_out_evaluation_schedule(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], max_steps: int) -> None:
+    torch.set_num_threads(1)
+    dataset = Dataset.from_dict({"nums": [[number, 1] for number in range(40)], "target": list(range(1, 41))})
+    backend = Tokenizer(WordLevel({"<pad>": 0, "<eos>": 1, "<unk>": 2, "puzzle": 3}, unk_token="<unk>"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, eos_token="<eos>", pad_token="<pad>", unk_token="<unk>", chat_template="{{ messages[-1]['content'] }}")
+    model = GPT2LMHeadModel(GPT2Config(vocab_size=4, n_positions=64, n_embd=8, n_layer=1, n_head=1, eos_token_id=1, pad_token_id=1))
+    model.config.name_or_path = str(tmp_path / "base-model")
+    model.save_pretrained(model.config.name_or_path)
+    trainers: list[GRPOTrainer] = []
+
+    def cpu_config(**kwargs: Any) -> GRPOConfig:
+        kwargs.update(bf16=False, use_cpu=True, use_vllm=False, model_init_kwargs=None, gradient_accumulation_steps=1, num_generations=2, max_completion_length=4, save_strategy="no", dataloader_pin_memory=False)
+        return GRPOConfig(**kwargs)
+
+    def cpu_trainer(**kwargs: Any) -> GRPOTrainer:
+        kwargs.update(model=model, peft_config=None)
+        trainer = GRPOTrainer(**kwargs)
+        trainers.append(trainer)
+        return trainer
+
+    monkeypatch.setattr(training, "load_dataset", lambda *args, **kwargs: dataset)
+    monkeypatch.setattr(training.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+    monkeypatch.setattr(training, "GRPOConfig", cpu_config)
+    monkeypatch.setattr(training, "GRPOTrainer", cpu_trainer)
+    monkeypatch.setattr(training, "EVAL_SIZE", 3)
+
+    training.main(output_dir=str(tmp_path), max_steps=max_steps, dataset_size=40, use_vllm=False)
+
+    trainer = trainers[0]
+    evaluation_logs = [entry for entry in trainer.state.log_history if "eval_rewards/equation_reward_func/mean" in entry]
+    assert [entry["step"] for entry in evaluation_logs] == ([0, 10] if max_steps == 10 else [0, 10, 11])
+    assert all(entry["eval_rewards/equation_reward_func/mean"] == 0.0 for entry in evaluation_logs)
+    assert isinstance(trainer.eval_dataset, Dataset)
+    assert isinstance(trainer.train_dataset, Dataset)
+    assert len(trainer.eval_dataset) == 3
+    assert set(trainer.train_dataset["target"]).isdisjoint(trainer.eval_dataset["target"])
+    assert trainer.generation_config.temperature == 1.0
+    assert trainer.generation_config.max_new_tokens == 4
+    assert TrainerState.load_from_json(str(tmp_path / "trainer_state.json")).log_history == trainer.state.log_history
+    assert "Held-out step 0 | solve rate 0.0%" in capsys.readouterr().out
+
+
+def test_readable_evaluation_log(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    logs = {"eval_rewards/equation_reward_func/mean": 0.25, "eval_rewards/format_reward_func/mean": 0.75, "eval_runtime": 12.0}
+    state = TrainerState(global_step=10, max_steps=100, is_world_process_zero=True)
+
+    training.ReadableLoggingCallback().on_log(TrainingArguments(output_dir=str(tmp_path), report_to="none"), state, TrainerControl(), logs=logs)
+
+    assert capsys.readouterr().out.strip() == "Held-out step 10 | solve rate 25.0% | format 75.0% | 12.00 s"
 
 
 def test_readable_step_log(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
