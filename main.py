@@ -46,7 +46,7 @@ class ReadableLoggingCallback(TrainerCallback):
         print("\n".join(lines), flush=True)
 
 
-def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
+def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
@@ -57,48 +57,42 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
 
-    grpo_config = GRPOConfig(
+    grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=2e-5,
-        lr_scheduler_type="cosine",
-        logging_steps=1,
+        num_train_epochs=1,
+        logging_steps=5,
         disable_tqdm=True,
         max_steps=max_steps,
         per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=1,
-        gradient_checkpointing=False,
+        gradient_accumulation_steps=16,
+        gradient_checkpointing=True,
         bf16=True,
         max_completion_length=MAX_COMPLETION_LENGTH,
-        num_generations=2,
+        num_generations=16,
+        temperature=1.0,
         use_vllm=use_vllm,
         vllm_mode="colocate",
-        vllm_gpu_memory_utilization=0.1,
+        vllm_gpu_memory_utilization=0.3,
         vllm_max_model_length=MAX_PROMPT_LENGTH + MAX_COMPLETION_LENGTH,
         beta=0.001,
+        save_total_limit=1,
         report_to="none",
     )
 
-    peft_config = LoraConfig(
+    peft_config: LoraConfig = LoraConfig(
         r=16,
         lora_alpha=32,
         lora_dropout=0.05,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         task_type="CAUSAL_LM",
     )
 
     # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
-        reward_funcs=[format_reward_func, equation_reward_func],
+        reward_funcs=[cast(Callable[..., list[float | None]], format_reward_func), cast(Callable[..., list[float | None]], equation_reward_func)],
         args=grpo_config,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
@@ -116,4 +110,3 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
 
 if __name__ == "__main__":
     main()
-
