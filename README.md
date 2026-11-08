@@ -58,3 +58,18 @@ The local tests validate both backend configurations and the reward functions. R
 The image build runs `pip check` and imports Pydantic, vLLM, and the GRPO trainer before starting the training function. `transformers==4.57.1` matches the NVIDIA vLLM package's exact dependency. `typing_extensions==4.15.0` restores `Sentinel`, which Pydantic needs, and `aiohttp==3.13.3` restores the networking version expected by the TRL vLLM integration after Modal's legacy bootstrap.
 
 Modal also recommends updating the workspace's [Image Builder](https://modal.com/settings/image-config). The explicit dependency pins above repair the observed legacy-builder downgrades without requiring a workspace-wide settings change.
+
+Training prints a compact summary instead of raw dictionaries and an overlapping progress bar:
+
+```text
+Step 1/100 | 18.16 s | loss -0.2459 | grad 0.0841 | lr 5.00e-07
+  Rewards | equation 0.0% | format 50.0% | total 0.500 | zero-std 0.0%
+  Outputs | mean 262.0 tokens | range 102-422 | truncated 0.0%
+  Policy  | KL 0.0000 | entropy 1.0414 | clipped 0.0%
+```
+
+All metrics retain their original precision in `log_history` inside `trainer_state.json`, saved alongside the adapter when training finishes. This includes sampling diagnostics omitted from the console summary. Download it with:
+
+```bash
+modal volume get llm-post-training /qwen-r1-aha-moment/trainer_state.json ./trainer_state.json
+```

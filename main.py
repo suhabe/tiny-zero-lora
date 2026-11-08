@@ -3,7 +3,8 @@ from typing import cast
 
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers.trainer_callback import PrinterCallback
 from trl import GRPOConfig, GRPOTrainer
 
 from reward import equation_reward_func, format_reward_func
@@ -21,7 +22,28 @@ def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], t
         {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
-    return {"prompt": prompt, "target": target}
+    return {"prompt": cast(str, prompt), "target": target}
+
+
+class ReadableLoggingCallback(TrainerCallback):
+    def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs: dict[str, float] | None = None, **kwargs: object) -> None:
+        if logs is None or not state.is_world_process_zero:
+            return
+
+        if "train_runtime" in logs:
+            print(f"Finished | {logs['train_runtime']:.2f} s total | training loss {logs['train_loss']:.4f}", flush=True)
+            return
+
+        if "loss" not in logs:
+            return
+
+        lines = [
+            f"Step {state.global_step}/{state.max_steps} | {logs['step_time']:.2f} s | loss {logs['loss']:.4f} | grad {logs['grad_norm']:.4f} | lr {logs['learning_rate']:.2e}",
+            f"  Rewards | equation {logs['rewards/equation_reward_func/mean']:.1%} | format {logs['rewards/format_reward_func/mean']:.1%} | total {logs['reward']:.3f} | zero-std {logs['frac_reward_zero_std']:.1%}",
+            f"  Outputs | mean {logs['completions/mean_length']:.1f} tokens | range {logs['completions/min_length']:.0f}-{logs['completions/max_length']:.0f} | truncated {logs['completions/clipped_ratio']:.1%}",
+            f"  Policy  | KL {logs['kl']:.4f} | entropy {logs['entropy']:.4f} | clipped {logs['clip_ratio/region_mean']:.1%}",
+        ]
+        print("\n".join(lines), flush=True)
 
 
 def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
@@ -41,6 +63,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
         learning_rate=5e-7,
         lr_scheduler_type="cosine",
         logging_steps=1,
+        disable_tqdm=True,
         max_steps=max_steps,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
@@ -58,17 +81,20 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
-        reward_funcs=[format_reward_func, equation_reward_func],
+        reward_funcs=[cast(Callable[..., list[float | None]], format_reward_func), cast(Callable[..., list[float | None]], equation_reward_func)],
         args=training_args,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
         processing_class=tokenizer,
         peft_config=LoraConfig(task_type="CAUSAL_LM"),
+        callbacks=[ReadableLoggingCallback()],
     )
+    trainer.remove_callback(PrinterCallback)
 
     trainer.train()
+    trainer.save_state()
     trainer.save_model(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
+    tokenizer.save_pretrained(output_dir)
 
 
 if __name__ == "__main__":

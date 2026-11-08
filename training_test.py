@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from datasets import Dataset
 import pytest
 from trl import GRPOConfig
+from transformers import TrainerControl, TrainerState, TrainingArguments
 
 import main as training
 
@@ -41,5 +42,32 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert config.max_completion_length == 1024
     assert config.beta == 0.001
     assert config.gradient_checkpointing is False
+    assert config.disable_tqdm is True
     create_trainer.return_value.train.assert_called_once()
     create_trainer.return_value.save_model.assert_called_once_with(str(tmp_path))
+    create_trainer.return_value.save_state.assert_called_once()
+
+
+def test_readable_step_log(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    logs = {"loss": -0.2459, "grad_norm": 0.0840676, "learning_rate": 5e-7, "step_time": 18.15729, "reward": 0.5, "rewards/format_reward_func/mean": 0.5, "rewards/equation_reward_func/mean": 0.0, "frac_reward_zero_std": 0.0, "completions/mean_length": 262.0, "completions/min_length": 102.0, "completions/max_length": 422.0, "completions/clipped_ratio": 0.0, "kl": 0.0, "entropy": 1.0414076, "clip_ratio/region_mean": 0.0}
+    original_logs = logs.copy()
+    state = TrainerState(global_step=1, max_steps=100, is_world_process_zero=True)
+
+    training.ReadableLoggingCallback().on_log(TrainingArguments(output_dir=str(tmp_path), report_to="none"), state, TrainerControl(), logs=logs)
+
+    output = capsys.readouterr().out
+    assert "Step 1/100 | 18.16 s" in output
+    assert "equation 0.0% | format 50.0% | total 0.500" in output
+    assert "mean 262.0 tokens | range 102-422 | truncated 0.0%" in output
+    assert "KL 0.0000 | entropy 1.0414 | clipped 0.0%" in output
+    assert "'loss':" not in output
+    assert logs == original_logs
+
+
+def test_readable_final_log(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    logs = {"train_runtime": 22.15, "train_loss": -0.2459}
+    state = TrainerState(global_step=1, max_steps=1, is_world_process_zero=True)
+
+    training.ReadableLoggingCallback().on_log(TrainingArguments(output_dir=str(tmp_path), report_to="none"), state, TrainerControl(), logs=logs)
+
+    assert capsys.readouterr().out.strip() == "Finished | 22.15 s total | training loss -0.2459"
