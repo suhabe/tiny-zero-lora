@@ -1,13 +1,13 @@
 import re
 
 
-def format_reward_func(completions: list[str], **kwargs: object) -> list[float]:
+def format_reward_func(completions: list[str]) -> list[float]:
     """Reward the expected thinking and answer tags; the prompt already ends in <think>."""
     pattern = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)</think>\n<answer>([\s\S]*?)</answer>$"
     return [1.0 if re.search(pattern, "<think>" + completion, re.DOTALL) else 0.0 for completion in completions]
 
 
-def equation_reward_func(completions: list[str], target: list[int], nums: list[list[int]], **kwargs: object) -> list[float]:
+def equation_reward_func(completions: list[str], target: list[int], nums: list[list[int]]) -> list[float]:
     """Reward expressions that use every supplied number once and evaluate to the target."""
     rewards: list[float] = []
 
