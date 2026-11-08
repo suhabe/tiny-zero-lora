@@ -10,8 +10,8 @@ from transformers import TrainerControl, TrainerState, TrainingArguments
 import main as training
 
 
-@pytest.mark.parametrize(("batch_size", "use_vllm"), [(2, True), (8, True), (2, False)])
-def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, batch_size: int, use_vllm: bool) -> None:
+@pytest.mark.parametrize(("batch_size", "use_vllm", "max_steps"), [(2, True, -1), (8, True, 1), (2, False, 1)])
+def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, batch_size: int, use_vllm: bool, max_steps: int) -> None:
     dataset = Dataset.from_dict({"nums": [[1, 2]] * 15 + [[3, 4]], "target": [3] * 15 + [7]})
     tokenizer = Mock(eos_token="<eos>")
     tokenizer.apply_chat_template.side_effect = lambda messages, **kwargs: "overlong" if "[3, 4]" in messages[1]["content"] else "prompt"
@@ -27,7 +27,10 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr(training, "GRPOConfig", cpu_config)
     monkeypatch.setattr(training, "GRPOTrainer", create_trainer)
 
-    training.main(output_dir=str(tmp_path), max_steps=1, dataset_size=16, batch_size=batch_size, use_vllm=use_vllm)
+    if max_steps == -1:
+        training.main(output_dir=str(tmp_path), dataset_size=16, batch_size=batch_size, use_vllm=use_vllm)
+    else:
+        training.main(output_dir=str(tmp_path), max_steps=max_steps, dataset_size=16, batch_size=batch_size, use_vllm=use_vllm)
 
     config = create_trainer.call_args.kwargs["args"]
     train_dataset = create_trainer.call_args.kwargs["train_dataset"]
@@ -38,11 +41,28 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert config.vllm_mode == "colocate"
     assert config.vllm_max_model_length == training.MAX_PROMPT_LENGTH + config.max_completion_length
     assert config.per_device_train_batch_size == batch_size
-    assert config.num_generations == 2
+    assert config.learning_rate == 2e-5
+    assert config.lr_scheduler_type == "linear"
+    assert config.num_train_epochs == 1
+    assert config.max_steps == max_steps
+    assert config.gradient_accumulation_steps == 16
+    assert config.num_generations == 16
     assert config.max_completion_length == 1024
     assert config.beta == 0.001
-    assert config.gradient_checkpointing is False
+    assert config.temperature == 1.0
+    assert config.vllm_gpu_memory_utilization == 0.3
+    assert config.gradient_checkpointing is True
+    assert config.logging_steps == 5
+    assert config.save_total_limit == 1
     assert config.disable_tqdm is True
+
+    peft_config = create_trainer.call_args.kwargs["peft_config"]
+    assert peft_config.r == 16
+    assert peft_config.lora_alpha == 32
+    assert peft_config.lora_dropout == 0.05
+    assert peft_config.target_modules == {"q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"}
+    assert peft_config.task_type == "CAUSAL_LM"
+
     create_trainer.return_value.train.assert_called_once()
     create_trainer.return_value.save_model.assert_called_once_with(str(tmp_path))
     create_trainer.return_value.save_state.assert_called_once()
