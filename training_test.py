@@ -51,7 +51,7 @@ def test_training_backend_configuration(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert config.beta == 0.001
     assert config.temperature == 1.0
     assert config.vllm_gpu_memory_utilization == 0.3
-    assert config.gradient_checkpointing is True
+    assert config.gradient_checkpointing is False
     assert config.logging_steps == 5
     assert config.save_total_limit == 1
     assert config.disable_tqdm is True

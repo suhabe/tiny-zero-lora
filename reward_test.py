@@ -45,6 +45,6 @@ def test_unsupported_operations_receive_zero_reward() -> None:
 
 
 @pytest.mark.parametrize("reward_func", [format_reward_func, equation_reward_func])
-def test_reward_callbacks_accept_trl_metadata(reward_func: Callable[..., list[float]]) -> None:
+def test_reward_callbacks_accept_trl_metadata(reward_func: Callable[..., list[float | None]]) -> None:
     rewards = reward_func(prompts=["prompt"], completions=[correct_sample_2], completion_ids=[[1, 2]], target=[65], nums=[[19, 36, 55, 7]], trainer_state=None, log_extra=None, log_metric=None)
     assert rewards == [1.0]
