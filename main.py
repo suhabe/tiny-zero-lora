@@ -10,9 +10,11 @@ from reward import equation_reward_func, format_reward_func
 
 
 MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
+MAX_PROMPT_LENGTH = 256
+MAX_COMPLETION_LENGTH = 1024
 
 
-def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_size: int = 50000) -> None:
+def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_size: int = 50000, batch_size: int = 2, use_vllm: bool = True) -> None:
     dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
     dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
 
@@ -29,6 +31,7 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
         return {"prompt": cast(str, prompt), "target": target}
 
     dataset = dataset.map(lambda row: generate_r1_prompt(row["nums"], row["target"]))
+    dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
 
     training_args = GRPOConfig(
@@ -36,16 +39,18 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=5e-7,
         lr_scheduler_type="cosine",
-        logging_steps=10,
+        logging_steps=1,
         max_steps=max_steps,
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        gradient_checkpointing=False,
         bf16=True,
-        max_prompt_length=256,
-        max_completion_length=1024,
+        max_completion_length=MAX_COMPLETION_LENGTH,
         num_generations=2,
+        use_vllm=use_vllm,
+        vllm_mode="colocate",
+        vllm_gpu_memory_utilization=0.1,
+        vllm_max_model_length=MAX_PROMPT_LENGTH + MAX_COMPLETION_LENGTH,
         beta=0.001,
         report_to="none",
     )
@@ -67,3 +72,4 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
 
 if __name__ == "__main__":
     main()
+
