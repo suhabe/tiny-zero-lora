@@ -1,3 +1,4 @@
+from reward import equation_reward_func, format_reward_func
 
 correct_sample_1 = """We need to find an equation using the numbers 19, 36, 55, and 7
 exactly once, with basic arithmetic operations, that equals 65. One possible
@@ -19,7 +20,21 @@ wrong_result = """ ... </think>
 <answer> 55 + 36 - 7 - 18 </answer>"""
 
 
-test_rewards = format_reward_func(completions=[correct_sample_1, correct_sample_2, wrong_format, wrong_format_2, wrong_result], target=["65", "65", "65", "65", "65"], nums=[[19, 36, 55, 7]] * 5)
-assert test_rewards == [1.0, 1.0, 0.0, 0.0, 1.0], "Reward function is not working"
-test_rewards = equation_reward_func(completions=[correct_sample_1, correct_sample_2, wrong_format, wrong_format_2, wrong_result], target=["65", "65", "65", "65", "65"], nums=[[19, 36, 55, 7]] * 5)
-assert test_rewards == [1.0, 1.0, 0.0, 0.0, 0.0], "Reward function is not working"
+def test_format_rewards() -> None:
+    rewards = format_reward_func(completions=[correct_sample_1, correct_sample_2, wrong_format, wrong_format_2, wrong_result], target=[65] * 5, nums=[[19, 36, 55, 7]] * 5)
+    assert rewards == [1.0, 1.0, 0.0, 0.0, 1.0]
+
+
+def test_equation_rewards() -> None:
+    rewards = equation_reward_func(completions=[correct_sample_1, correct_sample_2, wrong_format, wrong_format_2, wrong_result], target=[65] * 5, nums=[[19, 36, 55, 7]] * 5)
+    assert rewards == [1.0, 1.0, 0.0, 0.0, 0.0]
+
+
+def test_invalid_equations_receive_zero_reward() -> None:
+    completions = ["<answer>1 / 0</answer>", "<answer>2 + 2</answer>", "<answer>sum([1, 2])</answer>"]
+    assert equation_reward_func(completions, target=[3, 3, 3], nums=[[1, 0], [1, 2], [1, 2]]) == [0.0, 0.0, 0.0]
+
+
+def test_unsupported_operations_receive_zero_reward() -> None:
+    completions = ["<answer>2**3</answer>", "<answer>5//2</answer>", "<answer>1.2*5</answer>"]
+    assert equation_reward_func(completions, target=[8, 2, 6], nums=[[2, 3], [5, 2], [1, 2, 5]]) == [0.0, 0.0, 0.0]
