@@ -57,10 +57,10 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
     dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= MAX_PROMPT_LENGTH)
     datasets = dataset.train_test_split(test_size=0.1, seed=42)
 
-    training_args = GRPOConfig(
+    grpo_config = GRPOConfig(
         output_dir=output_dir,
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
-        learning_rate=5e-7,
+        learning_rate=2e-5,
         lr_scheduler_type="cosine",
         logging_steps=1,
         disable_tqdm=True,
@@ -78,22 +78,39 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
         beta=0.001,
         report_to="none",
     )
+
+    peft_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        task_type="CAUSAL_LM",
+    )
+
     # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
         reward_funcs=[format_reward_func, equation_reward_func],
-        args=training_args,
+        args=grpo_config,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
         processing_class=tokenizer,
-        peft_config=LoraConfig(task_type="CAUSAL_LM"),
+        peft_config=peft_config,
         callbacks=[ReadableLoggingCallback()],
     )
     trainer.remove_callback(PrinterCallback)
 
     trainer.train()
     trainer.save_state()
-    trainer.save_model(training_args.output_dir)
+    trainer.save_model(grpo_config.output_dir)
     tokenizer.save_pretrained(output_dir)
 
 
