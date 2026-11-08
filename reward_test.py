@@ -1,3 +1,7 @@
+from collections.abc import Callable
+
+import pytest
+
 from reward import equation_reward_func, format_reward_func
 
 correct_sample_1 = """We need to find an equation using the numbers 19, 36, 55, and 7
@@ -38,3 +42,9 @@ def test_invalid_equations_receive_zero_reward() -> None:
 def test_unsupported_operations_receive_zero_reward() -> None:
     completions = ["<answer>2**3</answer>", "<answer>5//2</answer>", "<answer>1.2*5</answer>"]
     assert equation_reward_func(completions, target=[8, 2, 6], nums=[[2, 3], [5, 2], [1, 2, 5]]) == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.parametrize("reward_func", [format_reward_func, equation_reward_func])
+def test_reward_callbacks_accept_trl_metadata(reward_func: Callable[..., list[float]]) -> None:
+    rewards = reward_func(prompts=["prompt"], completions=[correct_sample_2], completion_ids=[[1, 2]], target=[65], nums=[[19, 36, 55, 7]], trainer_state=None, log_extra=None, log_metric=None)
+    assert rewards == [1.0]
