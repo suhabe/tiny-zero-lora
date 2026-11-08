@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from typing import cast
 
 from datasets import load_dataset
@@ -89,10 +88,9 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = -1, dataset_si
         task_type="CAUSAL_LM",
     )
 
-    # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
-        reward_funcs=[cast(Callable[..., list[float | None]], format_reward_func), cast(Callable[..., list[float | None]], equation_reward_func)],
+        reward_funcs=[format_reward_func, equation_reward_func],
         args=grpo_config,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
