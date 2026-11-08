@@ -54,10 +54,10 @@ def main(output_dir: str = "qwen-r1-aha-moment", max_steps: int = 100, dataset_s
         beta=0.001,
         report_to="none",
     )
-    # TRL's callback type omits the dataset keyword arguments passed to reward functions.
+    # TRL's callback type also allows None for skipped rewards.
     trainer = GRPOTrainer(
         model=MODEL_ID,
-        reward_funcs=[cast(Callable[..., list[float]], format_reward_func), cast(Callable[..., list[float]], equation_reward_func)],
+        reward_funcs=[cast(Callable[..., list[float | None]], format_reward_func), cast(Callable[..., list[float | None]], equation_reward_func)],
         args=training_args,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
