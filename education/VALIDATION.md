@@ -29,3 +29,20 @@ and final saved-adapter evaluation. Those commands require the configured model
 environment and GPU. Their runtime compatibility, VRAM fit, throughput and
 learning outcomes remain unverified; passing the offline tests does not establish
 any of those. There are no fabricated model results or trained adapters in this PR.
+
+## Modal entrypoints
+
+Added separate CPU/GPU Modal entrypoints for every topic, sharing the original
+CUDA image and named volume. Verified with Modal SDK 1.6.3:
+
+- All entrypoints import and their `modal run ... --help` commands succeed locally.
+- The standard-library suite now has 14 passing tests, including six runner tests
+  for every lesson mapping, numeric complete-checkpoint selection, saved horizon,
+  baseline evaluation size, path/argument rejection and volume lifecycle.
+- The reward lesson executes as a real local child through the Modal runner.
+  A controlled child failure confirms the runner still commits and propagates it.
+- All Python files compile, including `modal_lessons.py` and the new performance lesson.
+
+No remote Modal job or image build was launched. Cloud image compatibility,
+volume behavior on Modal, GPU training/evaluation and checkpoint reload remain
+unverified end to end.

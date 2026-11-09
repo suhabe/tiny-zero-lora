@@ -5,6 +5,10 @@ how `train.py` turns those ideas into a language-model training run. Run command
 from the repository root with Python 3.12. Read the scripts alongside this guide;
 they are short entrypoints, not a second trainer implementation.
 
+To run each lesson remotely without installing the ML stack locally, use the
+separate commands in **[Run every lesson on Modal](MODAL.md)**. They share a
+persistent experiment directory and automatically resume complete checkpoints.
+
 | Concept from RL | Concrete object here |
 |---|---|
 | Context / initial state | Tokenized chat prefix containing `nums` and `target` |
