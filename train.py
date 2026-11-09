@@ -1,10 +1,55 @@
+from typing import cast
+
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.trainer_callback import PrinterCallback
 from trl import GRPOConfig, GRPOTrainer
-from countdown import equation_reward_func, format_reward_func, generate_r1_prompt
+import re
+
+
+# TRL forwards trainer metadata and every dataset column to both callbacks.
+def format_reward_func(completions: list[str], **kwargs: object) -> list[float | None]:
+    """Reward the expected thinking and answer tags; the prompt already ends in <think>."""
+    pattern = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)</think>\n<answer>([\s\S]*?)</answer>$"
+    return [1.0 if re.search(pattern, "<think>" + completion, re.DOTALL) else 0.0 for completion in completions]
+
+
+def equation_reward_func(completions: list[str], target: list[int], nums: list[list[int]], **kwargs: object) -> list[float | None]:
+    """Reward expressions that use every supplied number once and evaluate to the target."""
+    rewards: list[float | None] = []
+
+    for completion, expected, numbers in zip(completions, target, nums):
+        match = re.search(r"<answer>(.*?)</answer>", completion, re.DOTALL)
+        if match is None:
+            rewards.append(0.0)
+            continue
+
+        expression = match.group(1).strip()
+        used_numbers = [int(number) for number in re.findall(r"\d+", expression)]
+        if sorted(used_numbers) != sorted(numbers) or re.fullmatch(r"[0-9+\-*/()\s]+", expression) is None or "**" in expression or "//" in expression:
+            rewards.append(0.0)
+            continue
+
+        try:
+            result = eval(expression, {"__builtins__": None}, {})
+            rewards.append(1.0 if abs(float(result) - expected) < 1e-5 else 0.0)
+        except (ArithmeticError, SyntaxError, TypeError, ValueError):
+            rewards.append(0.0)
+
+    return rewards
+
+
+
+def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], target: int) -> dict[str, str | int]:
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Think through the problem before answering."},
+        {"role": "user", "content": f"Using the numbers {numbers}, create an expression that equals {target}. Use only basic arithmetic (+, -, *, /) and each number exactly once. Show your work in <think> </think> tags. Return only the expression, without an equals sign, in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."},
+        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
+    ]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
+    return {"prompt": cast(str, prompt), "target": target}
 
 
 class GPUMemoryCallback(TrainerCallback):
@@ -58,33 +103,33 @@ class ReadableLoggingCallback(TrainerCallback):
         print("\n".join(lines), flush=True)
 
 
-def prepare_data(model_id: str = "Qwen/Qwen2.5-3B-Instruct", dataset_size: int = 2000,
-                 max_prompt_length: int = 256, model_revision: str | None = None):
-    """The original shuffle/select/map/filter/split pipeline, reusable by lessons."""
-    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
-    dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
-    tokenizer = AutoTokenizer.from_pretrained(model_id, revision=model_revision, padding_side="left")
-    tokenizer.pad_token = tokenizer.eos_token
-    dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
-    dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= max_prompt_length)
-    return tokenizer, dataset.train_test_split(test_size=0.1, seed=42)
+def main() -> None:
 
-
-def build_trainer(*, output_dir: str = "qwen-r1-aha-moment", max_steps: int = 2000,
-                  prepared_data=None, config_overrides: dict | None = None) -> GRPOTrainer:
-    """Construct the original trainer; lessons may supply a saved data snapshot."""
+    output_dir = "qwen-r1-aha-moment"
     model_id = "Qwen/Qwen2.5-3B-Instruct"
     max_prompt_length = 256
     max_completion_length = 1024
-    tokenizer, dataset_split = prepared_data if prepared_data is not None else prepare_data()
+    dataset_size = 2000
+
+
+    dataset = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
+    dataset = dataset.shuffle(seed=42).select(range(min(dataset_size, len(dataset))))
+
+    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    dataset = dataset.map(lambda row: generate_r1_prompt(tokenizer, row["nums"], row["target"]))
+    dataset = dataset.filter(lambda row: len(tokenizer.encode(row["prompt"], add_special_tokens=False)) <= max_prompt_length)
+    dataset_split = dataset.train_test_split(test_size=0.1, seed=42)
     train_dataset = dataset_split["train"]
     eval_dataset = dataset_split["test"]
+    eval_steps = 10
 
-    config = dict(
+    grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=2e-5,
-        max_steps=max_steps,
+        max_steps=2000,
         lr_scheduler_type="linear",
         num_train_epochs=1,
         logging_steps=1,
@@ -110,9 +155,6 @@ def build_trainer(*, output_dir: str = "qwen-r1-aha-moment", max_steps: int = 20
         report_to="none",
     )
 
-    config.update(config_overrides or {})
-    grpo_config = GRPOConfig(**config)
-
     peft_config: LoraConfig = LoraConfig(
         r=16,
         lora_alpha=32,
@@ -133,19 +175,14 @@ def build_trainer(*, output_dir: str = "qwen-r1-aha-moment", max_steps: int = 20
     )
     trainer.remove_callback(PrinterCallback)
 
-    return trainer
-
-
-def main() -> None:
-    trainer = build_trainer()
     trainer.train()
 
-    if trainer.state.global_step % trainer.args.eval_steps != 0:
+    if trainer.state.global_step % eval_steps != 0:
         trainer.evaluate()
 
     trainer.save_state()
-    trainer.save_model(trainer.args.output_dir)
-    trainer.processing_class.save_pretrained(trainer.args.output_dir)
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
 
 
 if __name__ == "__main__":
