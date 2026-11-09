@@ -102,7 +102,7 @@ def main() -> None:
         eval_strategy="steps",
         eval_steps=10,
         eval_on_start=True,
-        per_device_eval_batch_size=1,
+        per_device_eval_batch_size=100,
         num_generations_eval=1,
         disable_tqdm=True,
         max_steps=500,
