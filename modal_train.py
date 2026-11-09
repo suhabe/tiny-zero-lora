@@ -7,20 +7,16 @@ SOURCE_DIR = Path(__file__).parent
 app = modal.App("llm-post-training")
 volume = modal.Volume.from_name("llm-post-training", create_if_missing=True)
 
-# Use vLLM's version-matched CUDA image. requirements.txt pins its torch and
-# transformers dependencies to the versions supported by vLLM 0.32.0.
-# vLLM provides python3 (but not python), while Modal's installer invokes python.
-# Create the alias during base setup, before the legacy builder installs pip tools.
-# Clear vLLM's "vllm serve" entrypoint so Modal can launch the training function.
+# Use a CUDA toolkit image for training and let Modal provide Python.
+# Keep nvcc available for vLLM kernels compiled at runtime.
+# requirements.txt pins the training stack, including vLLM for GRPO generation.
 image = (
     modal.Image.from_registry(
-        "vllm/vllm-openai:v0.32.0",
-        setup_dockerfile_commands=["RUN ln -sf /usr/bin/python3 /usr/local/bin/python"],
+        "nvidia/cuda:13.1.1-devel-ubuntu24.04", add_python="3.12"
     )
-    .entrypoint([])
-    .run_commands("python -m pip --version")
+    .apt_install("libnuma1")
+    .pip_install_from_requirements(str(SOURCE_DIR / "requirements.txt"))
 )
-image = image.pip_install_from_requirements(str(SOURCE_DIR / "requirements.txt"))
 image = image.run_commands(
     "python -m pip check",
     "python -c 'from importlib.metadata import version; expected = {\"torch\": \"2.13.0\", \"transformers\": \"5.19.0\", \"vllm\": \"0.32.0\"}; assert all(version(p) == v for p, v in expected.items()), {p: version(p) for p in expected}'",
