@@ -1,1 +1,5 @@
 .idea
+__pycache__/
+.venv/
+runs/
+qwen-r1-aha-moment/

@@ -25,6 +25,7 @@ image = image.run_commands(
 # Legacy Modal image builders can skip WORKDIR, so keep train.py on PYTHONPATH.
 image = image.env({"HF_HOME": "/data/huggingface", "PYTHONPATH": "/app"}).workdir("/app")
 image = image.add_local_file(SOURCE_DIR / "train.py", "/app/train.py")
+image = image.add_local_file(SOURCE_DIR / "countdown.py", "/app/countdown.py")
 
 
 @app.function(image=image, gpu="B300", cpu=8, memory=32768, timeout=86400, volumes={"/data": volume})
@@ -33,4 +34,3 @@ def train() -> None:
 
     main()
     volume.commit()
-
