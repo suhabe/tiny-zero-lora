@@ -6,9 +6,8 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.trainer_callback import PrinterCallback
 from trl import GRPOConfig, GRPOTrainer
-from train_callback import TrainingMonitorCallback
 import re
-
+from train_callback import TrainingMonitorCallback
 
 # TRL forwards trainer metadata and every dataset column to both callbacks.
 def format_reward_func(completions: list[str], **kwargs: object) -> list[float | None]:
