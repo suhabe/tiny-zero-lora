@@ -7,6 +7,18 @@ Start with **[the educational walkthrough](education/README.md)**. Its numbered
 scripts exercise the same prompt functions, verifiers, data preparation and
 trainer used by `train.py`.
 
+**[Run every lesson on Modal](education/MODAL.md)** using only the Modal client
+locally. Each lesson has a separate command, and one shared volume preserves
+data, baseline results, checkpoints and the saved adapter between invocations:
+
+```bash
+modal run modal_lessons.py::dataset
+modal run modal_lessons.py::baseline
+modal run modal_lessons.py::step
+modal run modal_lessons.py::training
+modal run modal_lessons.py::final_evaluation
+```
+
 ```bash
 # These lessons need only Python 3.12; no model download.
 python -m education.00_preflight
