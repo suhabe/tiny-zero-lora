@@ -96,9 +96,10 @@ def main() -> None:
 
     grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
-        reward_weights=[0.1, 1.0],
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=2e-5,
+        max_steps=2000,
+        lr_scheduler_type="linear",
         num_train_epochs=1,
         logging_steps=1,
         eval_strategy="steps",
@@ -107,10 +108,9 @@ def main() -> None:
         per_device_eval_batch_size=100,
         num_generations_eval=1,
         disable_tqdm=True,
-        max_steps=500,
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
-        num_generations=8,
+        num_generations=16,
         gradient_checkpointing=False,
         bf16=True,
         max_completion_length=max_completion_length,
