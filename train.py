@@ -6,6 +6,7 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.trainer_callback import PrinterCallback
 from trl import GRPOConfig, GRPOTrainer
+from train_callback import TrainingMonitorCallback
 import re
 
 
@@ -50,57 +51,6 @@ def generate_r1_prompt(tokenizer: PreTrainedTokenizerBase, numbers: list[int], t
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
     return {"prompt": cast(str, prompt), "target": target}
-
-
-class GPUMemoryCallback(TrainerCallback):
-    """Log device memory snapshots and this process's PyTorch peaks per optimizer step."""
-
-    def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
-        if state.is_world_process_zero and args.device.type == "cuda" and torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats(args.device)
-
-    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: object) -> None:
-        if not state.is_world_process_zero or args.device.type != "cuda" or not torch.cuda.is_available():
-            return
-
-        gib = 1024**3
-        device = args.device
-        free, total = torch.cuda.mem_get_info(device)
-        print(
-            f"  GPU step {state.global_step}"
-            f" | device used {(total - free) / gib:.1f}/{total / gib:.1f} GiB"
-            f" | device free {free / gib:.1f} GiB"
-            f" | torch allocated {torch.cuda.memory_allocated(device) / gib:.1f} GiB"
-            f" | torch reserved {torch.cuda.memory_reserved(device) / gib:.1f} GiB"
-            f" | torch peak allocated {torch.cuda.max_memory_allocated(device) / gib:.1f} GiB"
-            f" | torch peak reserved {torch.cuda.max_memory_reserved(device) / gib:.1f} GiB",
-            flush=True,
-        )
-
-
-class ReadableLoggingCallback(TrainerCallback):
-    def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs: dict[str, float] | None = None, **kwargs: object) -> None:
-        if logs is None or not state.is_world_process_zero:
-            return
-
-        if "eval_rewards/equation_reward_func/mean" in logs:
-            print(f"Held-out step {state.global_step} | solve rate {logs['eval_rewards/equation_reward_func/mean']:.1%} | format {logs['eval_rewards/format_reward_func/mean']:.1%} | {logs['eval_runtime']:.2f} s", flush=True)
-            return
-
-        if "train_runtime" in logs:
-            print(f"Finished | {logs['train_runtime']:.2f} s total | training loss {logs['train_loss']:.4f}", flush=True)
-            return
-
-        if "loss" not in logs:
-            return
-
-        lines = [
-            f"Step {state.global_step}/{state.max_steps} | {logs['step_time']:.2f} s | loss {logs['loss']:.4f} | grad {logs['grad_norm']:.4f} | lr {logs['learning_rate']:.2e}",
-            f"  Rewards | equation {logs['rewards/equation_reward_func/mean']:.1%} | format {logs['rewards/format_reward_func/mean']:.1%} | total {logs['reward']:.3f} | zero-std {logs['frac_reward_zero_std']:.1%}",
-            f"  Outputs | mean {logs['completions/mean_length']:.1f} tokens | range {logs['completions/min_length']:.0f}-{logs['completions/max_length']:.0f} | truncated {logs['completions/clipped_ratio']:.1%}",
-            f"  Policy  | KL {logs['kl']:.4f} | entropy {logs['entropy']:.4f} | clipped {logs['clip_ratio/region_mean']:.1%}",
-        ]
-        print("\n".join(lines), flush=True)
 
 
 def main() -> None:
@@ -171,7 +121,7 @@ def main() -> None:
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[ReadableLoggingCallback(), GPUMemoryCallback()],
+        callbacks=[TrainingMonitorCallback()],
     )
     trainer.remove_callback(PrinterCallback)
 
