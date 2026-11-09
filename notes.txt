@@ -1,0 +1,1 @@
+Held-out step 300 | solve rate 33.0% | format 97.5% | 25.17 s

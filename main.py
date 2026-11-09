@@ -92,9 +92,11 @@ def main() -> None:
     dataset_split = dataset.train_test_split(test_size=0.1, seed=42)
     train_dataset = dataset_split["train"]
     eval_dataset = dataset_split["test"]
+    eval_steps = 10
 
     grpo_config: GRPOConfig = GRPOConfig(
         output_dir=output_dir,
+        reward_weights=[0.1, 1.0],
         model_init_kwargs={"dtype": "bfloat16", "attn_implementation": "sdpa"},
         learning_rate=2e-5,
         num_train_epochs=1,
@@ -108,10 +110,10 @@ def main() -> None:
         max_steps=500,
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
+        num_generations=8,
         gradient_checkpointing=False,
         bf16=True,
         max_completion_length=max_completion_length,
-        num_generations=16,
         temperature=1.0,
         use_vllm=True,
         vllm_mode="colocate",
@@ -144,11 +146,11 @@ def main() -> None:
 
     trainer.train()
 
-    if trainer.state.global_step % EVAL_STEPS != 0:
+    if trainer.state.global_step % eval_steps != 0:
         trainer.evaluate()
 
     trainer.save_state()
-    trainer.save_model(grpo_config.output_dir)
+    trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
 
 
